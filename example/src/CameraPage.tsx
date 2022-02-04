@@ -14,7 +14,14 @@ import {
 } from 'react-native-vision-camera';
 import { Camera, frameRateIncluded } from 'react-native-vision-camera';
 import { CONTENT_SPACING, MAX_ZOOM_FACTOR, SAFE_AREA_PADDING } from './Constants';
-import Reanimated, { Extrapolate, interpolate, useAnimatedGestureHandler, useAnimatedProps, useSharedValue } from 'react-native-reanimated';
+import Reanimated, {
+  runOnJS,
+  Extrapolate,
+  interpolate,
+  useAnimatedGestureHandler,
+  useAnimatedProps,
+  useSharedValue,
+} from 'react-native-reanimated';
 import { useEffect } from 'react';
 import { useIsForeground } from './hooks/useIsForeground';
 import { StatusBarBlurBackground } from './views/StatusBarBlurBackground';
@@ -22,7 +29,7 @@ import { CaptureButton } from './views/CaptureButton';
 import { PressableOpacity } from 'react-native-pressable-opacity';
 import MaterialIcon from 'react-native-vector-icons/MaterialCommunityIcons';
 import IonIcon from 'react-native-vector-icons/Ionicons';
-import { examplePlugin } from './frame-processors/ExamplePlugin';
+import { examplePluginSwift } from './frame-processors/ExamplePlugin';
 import type { Routes } from './Routes';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useIsFocused } from '@react-navigation/core';
@@ -53,6 +60,7 @@ export function CameraPage({ navigation }: Props): React.ReactElement {
   const [flash, setFlash] = useState<'off' | 'on'>('off');
   const [enableNightMode, setEnableNightMode] = useState(false);
   const [enableDepthData, setEnableDepthData] = useState(true);
+  const returnDepthFrame = useSharedValue(false);
 
   // camera format settings
   const devices = useCameraDevices();
@@ -113,9 +121,7 @@ export function CameraPage({ navigation }: Props): React.ReactElement {
       result = result.filter((f) => f.supportsVideoHDR || f.supportsPhotoHDR);
     }
 
-    if (enableDepthData) {
-      result = result.filter((f) => f.supportedDepthDataFormats.includes('fdep'));
-    }
+    if (enableDepthData) result = result.filter((f) => f.supportedDepthDataFormats.includes('fdep'));
 
     // find the first format that includes the given FPS
     return result.find((f) => f.frameRateRanges.some((r) => frameRateIncluded(r, fps)));
@@ -211,11 +217,30 @@ export function CameraPage({ navigation }: Props): React.ReactElement {
     console.log('re-rendering camera page without active camera');
   }
 
-  const frameProcessor = useFrameProcessor((frame) => {
-    'worklet';
-    const values = examplePlugin(frame);
-    console.log(`Return Values: ${JSON.stringify(values)}`);
-  }, []);
+  //#region Callbacks
+  const setReturnDepthFrame = useCallback(
+    (_returnDepthFrame: boolean) => {
+      returnDepthFrame.value = _returnDepthFrame;
+    },
+    [returnDepthFrame],
+  );
+
+  // const onCaptureDepthFrame = useCallback(() => {
+  //   setReturnDepthFrame(true);
+  // }, [setReturnDepthFrame]);
+
+  const frameProcessor = useFrameProcessor(
+    (frame) => {
+      'worklet';
+
+      const values = examplePluginSwift(frame, returnDepthFrame.value);
+      console.log(`Return Values: ${JSON.stringify(values)}`);
+
+      // Only return a single frame
+      if (returnDepthFrame.value) runOnJS(setReturnDepthFrame)(false);
+    },
+    [returnDepthFrame.value, setReturnDepthFrame],
+  );
 
   const onFrameProcessorSuggestionAvailable = useCallback((suggestion: FrameProcessorPerformanceSuggestion) => {
     console.log(`Suggestion available! ${suggestion.type}: Can do ${suggestion.suggestedFrameProcessorFps} FPS`);
@@ -243,6 +268,7 @@ export function CameraPage({ navigation }: Props): React.ReactElement {
                 photo={true}
                 video={true}
                 enableDepthData={device.supportsDepthCapture && enableDepthData}
+                enablePortraitEffectsMatteDelivery={true}
                 depthDataFormat="fdep"
                 audio={hasMicrophonePermission}
                 frameProcessor={device.supportsParallelVideoProcessing ? frameProcessor : undefined}
@@ -296,6 +322,11 @@ export function CameraPage({ navigation }: Props): React.ReactElement {
         {supportsDepthData && (
           <PressableOpacity style={styles.button} onPress={() => setEnableDepthData((d) => !d)}>
             <MaterialIcon name={enableDepthData ? 'video-3d' : 'video-3d-off'} color="white" size={24} />
+          </PressableOpacity>
+        )}
+        {supportsDepthData && (
+          <PressableOpacity style={styles.button} onPress={() => setReturnDepthFrame(true)}>
+            <MaterialIcon name={'account-alert'} color="white" size={24} />
           </PressableOpacity>
         )}
         {canToggleNightMode && (
